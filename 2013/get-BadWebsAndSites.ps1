@@ -1,4 +1,6 @@
-﻿$waName = "https://spwinauth.uvm.edu"
+# Bad webs and sites in this context are webs that were created using templates
+# that are not supported under SharePoint 2013.﻿
+$waName = "https://spwinauth.uvm.edu"
 $outDir = "C:\local\temp\"
 
 set-psdebug -Strict
@@ -7,12 +9,17 @@ $Sites = Get-SPSite -WebApplication $waName -Limit All
 
 #Enumerate all webs and their template types:
 [string] $allWebs = $outDir + 'allWebsWithTemplates.csv'
-$Sites | % {$_.allWebs} | % { [string]$( $_.webTemplate + ',' + $_.webTemplateID + ',' + $_.Url.ToString() + ',"' + $_.site.lastContentModifiedDate.ToShortDateString() + '"' ) } > $allWebs
+$Sites | % {$_.allWebs} | % {
+  [string]$( $_.webTemplate + ',' + $_.webTemplateID + ',' + $_.Url.ToString() `
+    + ',"' + $_.site.lastContentModifiedDate.ToShortDateString() + '"' )
+  } > $allWebs
 
 #Find Webs using unsupported templates:
 [string] $badWebs = $outdir + 'badWebsWithTemplates.csv'
-get-content $allWebs | select-string -NotMatch '^STS|^WIKI|^MPS|^SGS|^BLOG|^,90' > $badWebs
+get-content $allWebs | select-string -NotMatch `
+  '^STS|^WIKI|^MPS|^SGS|^BLOG|^,90' > $badWebs
 
 #Find Sites containing bad webs:
 [string] $badSites = $outDir + 'badSites.txt'
-Get-Content $badWebs | % {$_.split(',') | Select-Object -index 2} | % {get-spweb -Identity $_} | % {$_.site} | Sort-Object -Unique > $badSites
+Get-Content $badWebs | % {$_.split(',') | Select-Object -index 2} `
+  | % {get-spweb -Identity $_} | % {$_.site} | Sort-Object -Unique > $badSites
