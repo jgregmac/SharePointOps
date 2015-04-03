@@ -21,6 +21,11 @@ $out | out-file -FilePath $allWebsFile -Append
 Add-PSSnapin Microsoft.SharePoint.Powershell -ErrorAction SilentlyContinue
 
 function Test-SPFeatures {
+    <#
+    Takes an input SharePoint web or site object, loops though the features, and compares them
+    to items in the test array.  Any matches are returned.  If excludeArray is provided, these
+    results will be omitted.
+    #>
     [cmdletBinding()]
     param(
         $PSObj,
@@ -29,7 +34,7 @@ function Test-SPFeatures {
     )
     [string[]]$features = $PSObj.features | % {$_.DefinitionID.ToString()}
     #Hey... what about features that have a blank definition id?
-    $badFeas = @()
+    [array[]]$badFeas = @()
     foreach ($fea in $features) {
         $out = "Testing: " + $fea
         write-verbose $out
@@ -52,7 +57,8 @@ function Test-SPFeatures {
                 }
                 if (-not $Excluded) {
                     write-verbose "        Feature is not excluded.  Reporting..."
-                    $badFeas += $src
+                    # Cast the returned site info to an array:
+                    $badFeas += ,@($src)
                 }
             } 
         }
@@ -107,73 +113,28 @@ Write-Host "Collecting all sites..." -ForegroundColor Cyan
 #[array]$Sites = Get-SPSite -WebApplication $webApplication -Limit All
 [array]$sites = get-spsite https://sharepoint.uvm.edu/sites/FDC
 
-$badSites2 = @()
-$badWebs2 = @()
-$actives = @()
+[array[]]$badSites2 = @()
+[array[]]$badWebs2 = @()
 
 Write-host "Finding sites and webs that use bad features..."
 foreach ($site in $sites) {
     #Add logic to this loop that will flag any site that uses features that are not in the destination farm.
-    [string[]]$features = $site.features | % {$_.DefinitionID.ToString()}
-    #Hey... what about features that have a blank definition id?
-    $badFeas = @()
-    foreach ($fea in $features) {
-        write-host "Testing:" $fea
-        foreach ($src in $srcOnly){
-            #$srcOnly | %{if ($features -contains $_[0]) {Write-host "Feaure is named" $_[1]} }
-            if ($src[0] -eq $fea) {
-                write-host "    Source-only feature found:" $src[1] -ForegroundColor DarkMagenta
-                [bool]$Report = $true
-                #write-host "    Report boolean set to:" $report
-                foreach ($webApp in $oWebApps) {
-                    if ($webApp -eq $src[0]) {
-                        write-host "        Feature is a webApp.  Skipping." -ForegroundColor Green
-                        $Report = $false
-                        #write-host "        Report boolean set to:" $report
-                    }
-                }
-                #write-host "        Report boolean set to:" $report
-                if ($Report) {
-                    write-host "        Feature is not a webApp.  Reporting..." -ForegroundColor Red
-                    $badFeas += $src
-                    $actives += $src[1]
-                }
-            }
-        }
-    }
-    if ($badFeas.count -gt 0) {
-        $badSites2 += ,@($site.url,$badFeas)
-    }
+    #Problem here is that if only one bad feature is discovered, the result is an array of three items, instead 
+    # of an array of one array with three items.  Must Fix!
+    #maybe stop trying to manage this array of arrays.  It is needlessly confusing.
+    $badSites2 += Test-SPFeatures -PSObj $site -testArray $srcOnly -excludeArray $oWebApps -verbose
+    #if ($badFeas.count -gt 0) {
+    #    $badSites2 += ,@($site.url,$badFeas)
+    #}
     $webs = @()
     $webs += $site.allwebs
     foreach ($web in $webs) {
-        $badFeas = @()
-        foreach ($fea in $features) {
-            foreach ($src in $srcOnly){
-                if ($src[0] -eq $fea) {
-                    [bool]$Report = $true
-                    foreach ($webApp in $oWebApps) {
-                        if ($webApp -eq $src[0]) {
-                            $Report = $false
-                        }
-                    }
-                    if ($Report) {
-                        $badFeas += $src
-                        $actives += $src[1]
-                    }
-                }
-            }
-        }
-        if ($badFeas.count -gt 0) {
-            $badWebs2 += ,@($web.url,$badFeas)
-        }
+        $badWebs2 += Test-SPFeatures -PSObj $web -testArray $srcOnly -excludeArray $oWebApps -verbose
         $web.Dispose()
     }
     $site.Dispose()
 }
 
-$activeCrap = @()
-$activeCrap += $actives | sort -unique
 
 write-host "Gathering information about all webs..." -ForegroundColor Cyan
 foreach ($site in $sites) {
@@ -216,10 +177,3 @@ foreach ($entry in $badWebs) {
     $badSites += $out
 }
 $badSites | Sort-Object -Unique > $badSitesFile
-
-<# Pointless code...
-write-host "Generating a simple list of sites containing bad webs..." -ForegroundColor Yellow
-#Find Sites containing bad webs:
-Get-Content $badWebs | % {$_.split(',') | Select-Object -index 2} `
-  | % {get-spweb -Identity $_} | % {$_.site} | Sort-Object -Unique > $badSites
-#>
