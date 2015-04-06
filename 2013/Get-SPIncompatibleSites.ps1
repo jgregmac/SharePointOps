@@ -68,15 +68,17 @@ function Test-SPFeatures {
         }
     }
     if ($badFeas.count -gt 0) {
+        Write-verbose "Testing complete, returning bad features..."
         return $badFeas
     }
 }
 
-function New-BadSiteReport {
+function New-BadWebReport {
     [cmdletBinding()]
     param(
         $web,
-        [string[]]$badFeatNames
+        [string[]]$badSiteFeatures,
+        [string[]]$badWebFeatures
     )
     if ($web.IsRootWeb) {
         [string]$rootWeb = $web.Url
@@ -92,8 +94,9 @@ function New-BadSiteReport {
         'SiteUrl'         = $rootWeb;
         'Admins'          = $admins;
         'Owner'           = $web.site.owner.userLogin;
-        'BadFeatures'     = $badFeatNames;
-        'ContentDatabase' = $web.site.contentdatabase.name;
+        'BadWebFeatures'  = $badWebFeatures;
+        'BadSiteFeatures' = $badSiteFeatures;
+        'ContentDB' = $web.site.contentdatabase.name;
         'LastModified'    = $web.lastItemModifiedDate.ToShortDateString()
     }
     $web.Dispose()
@@ -110,7 +113,7 @@ foreach ($src in $srcFeatures) {
     $properties = @{'id'=$src.id.toString();
                     'displayName'=$src.displayName;
                     'scope'=$src.scope.toString()}
-    $object = New-Object –TypeName PSObject –Prop $properties
+    $object = New-Object -TypeName PSObject -Prop $properties
     $nrmSrcFeatures += $object
 }
 remove-variable srcFeatures
@@ -133,16 +136,16 @@ remove-variable dstFeatures
 remove-variable srcs,dsts
 
 #Office WebApps feature IDs... these will be excluded from reporting:
-[string[]]$okFeatures = @(`
-    '8dfaf93d-e23c-4471-9347-07368668ddaf',`
-    '893627d9-b5ef-482d-a3bf-2a605175ac36',`
-    '738250ba-9327-4dc0-813a-a76928ba1842',`
-    '1663ee19-e6ab-4d47-be1b-adeb27cfd9d2',`
-    '3d433d02-cf49-4975-81b4-aede31e16edf',`
-    'e995e28b-9ba8-4668-9933-cf5c146d7a9f',`
-    '3cb475e7-4e87-45eb-a1f3-db96ad7cf313',`
-    '5709298b-1876-4686-b257-f101a923f58d'`
-)
+[string[]]$okFeatures = @()
+    $okFeatures += '8dfaf93d-e23c-4471-9347-07368668ddaf' #MobileWordViewer
+    $okFeatures += '893627d9-b5ef-482d-a3bf-2a605175ac36' #MobilePowerPointViewer
+    $okFeatures += 'e8389ec7-70fd-4179-a1c4-6fcb4342d7a0' #ReportServer
+    $okFeatures += '738250ba-9327-4dc0-813a-a76928ba1842' #PowerPointEditServer
+    $okFeatures += '1663ee19-e6ab-4d47-be1b-adeb27cfd9d2' #WordViewer
+    $okFeatures += '3d433d02-cf49-4975-81b4-aede31e16edf' #OneNote
+    $okFeatures += 'e995e28b-9ba8-4668-9933-cf5c146d7a9f' #MobileExcelWebAccess
+    $okFeatures += '3cb475e7-4e87-45eb-a1f3-db96ad7cf313' #ExcelServerSite
+    $okFeatures += '5709298b-1876-4686-b257-f101a923f58d' #PowerPointServer
 
 #Hashtable for Template ID to Name lookups:
 $srcOnlyHash = @{}
@@ -155,7 +158,7 @@ foreach ($obj in $nrmSrcFeatures) {
 }
 
 # What are the names of these features?
-Write-host 'Bad Features:' -ForegroundColor DarkMagenta
+Write-host 'Bad Features:' -ForegroundColor Magenta
 $srcOnly | %{$srcOnlyHash.$($_)} | sort
 write-host
 write-host 'Not so bad features:' -ForegroundColor Green
@@ -163,70 +166,50 @@ $okFeatures | %{$srcOnlyHash.$($_)} | sort
 
 Write-Host "Collecting all sites..." -ForegroundColor Cyan
 [array]$Sites = Get-SPSite -WebApplication $webApplication -Limit All
-#[array]$sites = get-spsite https://sharepoint.uvm.edu/sites/FDC
+#For debugging, change $sites to a single site:
+#[array]$sites = get-spsite https://sharepoint.uvm.edu/sites/lgbtqa
 
-#[array[]]$badSites2 = @()
-[array[]]$badWebs2 = @()
+# Initialize the collection of bad sites/webs:
+[array]$badWebs = @()
 
 Write-host "Finding sites and webs that use bad features..."
 foreach ($site in $sites) {
-    [string[]]$badFeatIds = @()
-    $badFeatIds += Test-SPFeatures -PSObj $site -testArray $srcOnly -excludeArray $okFeatures #-verbose
-    [string[]]$badFeatNames = @()
-    $badFeatNames += $badFeatIds | %{$srcOnlyHash.$($_)}
-    $webs = @()
-    $webs += $site.allwebs
-    foreach ($web in $webs) {
-        $badFeatIds += Test-SPFeatures -PSObj $web -testArray $srcOnly -excludeArray $okFeatures #-verbose
-        # Don't re-initialize the array... we will aggregate site and web features together.
-        #[string[]]$badFeatNames = @()
-        $badFeatNames += $badFeatIds | %{$srcOnlyHash.$($_)}
-        $badFeatNames = $badFeatNames | Sort -Unique
-        $badWebs2 += New-BadSiteReport -web $web -badFeatNames $badFeatNames
-        $web.Dispose()
+    # Get the feature IDs for all features in the site that are "bad" (i.e. not in the destination farm):
+    #   (Typically I will declare an array and cast ahead of time, but in this case doing so results in an 
+    #   array.count value of "1", even when the array is really empty.)
+    [array]$badSiteFeatureIds = Test-SPFeatures -PSObj $site -testArray $srcOnly -excludeArray $okFeatures #-verbose
+    # Convert the collected IDs to Names:
+    if ($badSiteFeatureIds.count -gt 0) {
+        write-host "Found Site Collection with bad feature:" $site.url -ForegroundColor Magenta
+        [array]$badSiteFeatureNames = $badSiteFeatureIds | %{$srcOnlyHash.$($_)}
     }
-    $site.Dispose()
-}
-
-<#write-host "Gathering information about all webs..." -ForegroundColor Cyan
-foreach ($site in $sites) {
-    #Add logic to this loop that will flag any site that uses features that are not in the destination farm.
-    $webs = @()
-    $webs += $site.allwebs
+    # Now look into the webs of the site collection:
+    [array]$webs = $site.allwebs
     foreach ($web in $webs) {
-        if ($web.IsRootWeb) {
-            [string]$rootWeb = $web.Url
-        } else {
-            [string]$rootWeb = $web.Site.Url
+        # Test the feature IDs of the web object for "bads":
+        [array]$badWebFeatureIds = Test-SPFeatures -PSObj $web -testArray $srcOnly -excludeArray $okFeatures #-verbose
+        # If we find bads...
+        if ($badWebFeatureIds.count -gt 0) {
+            Write-Host "Found Web Site with bad feature:" $web.url -ForegroundColor Magenta
+            # Convert IDs to Names:
+            [array]$badWebFeatureNames = $badWebFeatureIds | %{$srcOnlyHash.$($_)}
+            $badWebFeatureNames = $badWebFeatureNames | Sort -Unique
+            if ($badSiteFeatureNames -gt 0) {
+                # In this scenario, we have a bad site-scoped feature, so report that for all sub-webs:
+                $badWebs += New-BadWebReport -web $web -badSiteFeatures $badSiteFeatureNames -badWebFeatures $badWebFeatureNames
+            } else {
+                # In this scenario, we are in a sub-web, and so will not report on site-scoped features:
+                $badWebs += New-BadWebReport -web $web -badWebFeatures $badWebFeatureNames
+            }
         }
-        [string]$admins = ''
-        $web.SiteAdministrators | % {$admins += ($_.UserLogin + ';')}
-        $admins += $web.SiteAdministrators | % {$_.UserLogin}
-        [string]$out = $web.webTemplate + ',' `
-            + $web.webTemplateID + ',' `
-            + $web.Url.ToString() + ',' `
-            + $rootWeb + ',' `
-            + $admins + ',' `
-            + $site.contentdatabase.name + ',"' `
-            + $web.lastItemModifiedDate.ToShortDateString() + '"'
-        $allWebs += $out
         $web.Dispose()
     }
     $site.Dispose()
 }
-$allWebs | Out-File -Append $allWebsFile
-
+Write-Host "All done." -ForegroundColor Cyan
+<# Historical - filtering against known-bad site template names:
 write-host "Reporting on webs that use an unsupported template..." -ForegroundColor Cyan
 [array]$badWebs = @()
 $badWebs += $allWebs | ? {$_ -notMatch '^STS|^WIKI|^MPS|^SGS|^BLOG|^,90'}
 $badWebs > $badWebsFile
-  
-write-host "Writing a second report that contains just the site collection url and content database:" -ForegroundColor cyan
-[array]$badSites = @()
-foreach ($entry in $badWebs) {
-    [array]$keep = $entry.split(',') | Select-Object -index 2,5 
-    [string]$out = $keep[0] + ',' + $keep[1]
-    $badSites += $out
-}
-$badSites | Sort-Object -Unique > $badSitesFile
 #>
