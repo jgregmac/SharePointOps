@@ -3,12 +3,13 @@
 param(
     [string]$webApplication = "https://sharepoint.uvm.edu",
     [string]$outDir = "C:\local\temp\",
+    [string]$outFile = "badWebs.xml",
     [int32]$languageCodePage = "1033"
 )
 set-psdebug -Strict
 
 # Output file paths:
-#[string]$badWebsFile = $outdir + 'badWebs.csv'
+[string]$badWebsFile = Join-Path $outdir $outFile
 
 # Load SharePoint PowerShell CmdLets:
 Add-PSSnapin Microsoft.SharePoint.Powershell -ErrorAction SilentlyContinue
@@ -21,11 +22,11 @@ function Get-SPBadFeatures {
     #>
     [cmdletBinding()]
     param(
-        $PSObj,
+        $SPObj,
         $testArray,
         $excludeArray
     )
-    [string[]]$features = $PSObj.features | % {$_.DefinitionID.ToString()}
+    [string[]]$features = $SPObj.features | % {$_.DefinitionID.ToString()}
     #Hey... what about features that have a blank definition id?
     [array[]]$badFeas = @()
     foreach ($fea in $features) {
@@ -88,7 +89,7 @@ function New-BadWebReport {
         'Owner'           = $web.site.owner.userLogin;
         'BadWebFeatures'  = $badWebFeatures;
         'BadSiteFeatures' = $badSiteFeatures;
-        'ContentDB' = $web.site.contentdatabase.name;
+        'ContentDB'       = $web.site.contentdatabase.name;
         'LastModified'    = $web.lastItemModifiedDate.ToShortDateString()
     }
     $web.Dispose()
@@ -99,9 +100,38 @@ function New-BadWebReport {
 #Collect all FeatureIDs in the farm:
 #  Get-SPFeature returns non-string values.  Normalize to Strings:
 $id = @{Name = 'Id'; Expression = {$_.Id.toString()}}
-$scope = @{Name = 'Scope'; Expression = {$_.Scope.toString()}}
+$scope = @{
+    Name = 'Scope'; 
+    Expression = {
+        #Check to see if the feature is hidden:
+        if ($_.Hidden) {
+            #If so, indicate hidden status:
+            return 'Hidden:' + $_.Scope.toString()
+        } else {
+            return $_.Scope.toString()
+        }
+    }
+}
 #  The user-facing feature title needs to be retrieved via method call:
-$title = @{Name = 'Title'; Expression = {$_.GetTitle($languageCodePage)}}
+$title = @{
+    Name = 'Title'; 
+    Expression = {
+        [string]$title = $_.GetTitle($languageCodePage)
+        #Check to see if the feature has a missing localized title:
+        if ($title -match '\$Res') {
+            #if so, substitute the displayName: 
+            $title = 'InternalName:' + $obj.displayName
+        }
+        #Check to see if the feature is hidden:
+        if ($_.Hidden) {
+            #If so, indicate hidden status:
+            return 'Hidden:' + $title
+        } else {
+            return $title
+        }
+        remove-variable title
+    }
+}
 [array]$srcFeatures = Get-SPFeature | Select-Object -Property $Id,DisplayName,$title,$Scope `
     | Sort -Property DisplayName
 
@@ -122,14 +152,11 @@ remove-variable dstFeatures
 
 remove-variable srcs,dsts
 
-#Hashtable for Template ID to Name lookups:
-$dispNameHash = @{}
 #Hashtable for Template ID to Title lookups (Title the user-facing name of the feature).
 $titleHash = @{}
 foreach ($obj in $srcFeatures) {
     foreach ($src in $srcOnly) {
         if ($obj.id -eq $src) {
-            $dispNameHash.add($obj.id,$obj.displayName)
             $titleHash.add($obj.Id,$obj.Title)
         }
     }
@@ -149,11 +176,11 @@ Remove-Variable src,obj
     $okFeatures += '5709298b-1876-4686-b257-f101a923f58d' #PowerPointServer
 
 # What are the names of these features?
-Write-host 'Bad Features:' -ForegroundColor Magenta
-$srcOnly | %{$dispNameHash.$($_)} | sort
+Write-host 'Features missing in the target farm:' -ForegroundColor Magenta
+$srcOnly | %{$titleHash.$($_)} | sort | out-host
 write-host
-write-host 'Not so bad features:' -ForegroundColor Green
-$okFeatures | %{$dispNameHash.$($_)} | sort
+write-host 'Features to exclude from reporting:' -ForegroundColor Green
+$okFeatures | %{$titleHash.$($_)} | sort | out-host
 
 write-host
 Write-Host "Collecting all sites..." -ForegroundColor Cyan
@@ -169,24 +196,27 @@ foreach ($site in $sites) {
     # Get the feature IDs for all features in the site that are "bad" (i.e. not in the destination farm):
     #   (Typically I will declare an array and cast ahead of time, but in this case doing so results in an 
     #   array.count value of "1", even when the array is really empty.)
-    [array]$badSiteFeatureIds = Get-SPBadFeatures -PSObj $site -testArray $srcOnly -excludeArray $okFeatures #-verbose
+    [array]$badSiteFeatureIds = Get-SPBadFeatures -SPObj $site -testArray $srcOnly -excludeArray $okFeatures #-verbose
     # Convert the collected IDs to Names:
+    # (We must initialize this array so that it exists when tested in the "foreach ($web in $webs)" loop.)
+    [string[]]$badSiteFeatureNames = @() 
     if ($badSiteFeatureIds.count -gt 0) {
         write-host "Found Site Collection with bad feature(s):" $site.url -ForegroundColor Magenta
-        [array]$badSiteFeatureNames = $badSiteFeatureIds | %{$titleHash.$($_)}
+        $badSiteFeatureNames += $badSiteFeatureIds | %{$titleHash.$($_)}
     }
+        
     # Now look into the webs of the site collection:
     [array]$webs = $site.allwebs
     foreach ($web in $webs) {
         # Test the feature IDs of the web object for "bads":
-        [array]$badWebFeatureIds = Get-SPBadFeatures -PSObj $web -testArray $srcOnly -excludeArray $okFeatures #-verbose
+        [string[]]$badWebFeatureIds = Get-SPBadFeatures -SPObj $web -testArray $srcOnly -excludeArray $okFeatures #-verbose
         # If we find bads...
         if ($badWebFeatureIds.count -gt 0) {
             Write-Host "Found Web Site with bad feature(s):" $web.url -ForegroundColor Magenta
             # Convert IDs to Names:
-            [array]$badWebFeatureNames = $badWebFeatureIds | %{$titleHash.$($_)}
-            $badWebFeatureNames = $badWebFeatureNames | Sort -Unique
-            if ($badSiteFeatureNames -gt 0) {
+            [string[]]$badWebFeatureNames = $badWebFeatureIds | %{$titleHash.$($_)} #| sort -unique
+            #$badWebFeatureNames = $badWebFeatureNames | Sort -Unique
+            if ($badSiteFeatureNames.count -gt 0) {
                 # In this scenario, we have a bad site-scoped feature, so report that for all sub-webs:
                 $badWebs += New-BadWebReport -web $web -badSiteFeatures $badSiteFeatureNames -badWebFeatures $badWebFeatureNames
             } else {
@@ -198,11 +228,13 @@ foreach ($site in $sites) {
     }
     $site.Dispose()
 }
+
+Write-host
+write-host "Writing report to CliXml File..." -ForegroundColor Cyan
+$badWebs | Export-Clixml -Path $badWebsFile
+#Note: On later versions of PowerShell, we could use Out-HTML to generate human-readable data.
+
+Write-Host
 Write-Host "All done." -ForegroundColor Cyan
+
 return $badWebs
-<# Historical - filtering against known-bad site template names:
-write-host "Reporting on webs that use an unsupported template..." -ForegroundColor Cyan
-[array]$badWebs = @()
-$badWebs += $allWebs | ? {$_ -notMatch '^STS|^WIKI|^MPS|^SGS|^BLOG|^,90'}
-$badWebs > $badWebsFile
-#>
