@@ -96,9 +96,11 @@ param (
     [string]$csvPath
 )
 Set-PSDebug -Strict
-add-pssnapin microsoft.sharepoint.powershell -erroraction 0
+add-pssnapin microsoft.sharepoint.powershell -ea Stop
+Import-Module ActiveDirectory -ea Stop
 
 $objCSV = @()
+[string]$out = ''
 
 switch($PSCmdlet.ParameterSetName) {
     "convert" {
@@ -106,7 +108,8 @@ switch($PSCmdlet.ParameterSetName) {
         foreach ($object in $objCSV) {
             $user = Get-SPUser -identity $object.OldLogin -web $object.SiteCollection 
             write-host "Moving user:" $user "to:" $object.NewLogin "in site:" $object.SiteCollection 
-            move-spuser -identity $user -newalias $object.NewLogin -ignoresid -Confirm:$false
+            move-spuser -identity $user -newalias $object.NewLogin -ignoresid -Confirm:$false `
+                -ea SilentlyContinue
         }
     } # End "convert" 
 
@@ -114,20 +117,35 @@ switch($PSCmdlet.ParameterSetName) {
         Write-Host ""
         $sites = @()
         if($WebApplication) {
+            $out = 'Gathering Site Collections from: ' + $webApplication
+            write-host -foregroundColor Cyan $out
             $sites = get-spsite -WebApplication $webApplication -Limit All
         }
         elseif($SPSite) {
+            $out = 'Retrieving Site Collections: ' + $SPSite
+            write-host -foregroundColor Cyan $out
             $sites = get-spsite $SPSite
         }
         else {
+            $out = 'Gathering Sites Collections from the local farm.  Dangerous!'
+            write-host -foregroundColor Red $out
             $sites = get-spsite -Limit All
         }
 
         foreach($site in $sites) {
-		    $webs = @() #needed to prevent the next foreach from attempting to loop a non-array variable
+            $out = "Evaluating site: " + $site.url
+            write-host -foregroundColor Cyan $out
+            #Initialize $webs as an array
+            # (needed to prevent the next foreach from attempting to loop a non-array variable.)
+		    $webs = @() 
             $webs = $site.AllWebs
+            
+            $out = "    Site has " + $webs.count + " webs."
+            write-host -foregroundColor Cyan $out
 
             foreach($web in $webs) {
+                $out = "    Evaluating web: " + $web.url
+                write-host -foregroundColor Green $out
                 # Get all of the users in a site
 			    $users = @()
                 $users = get-spuser -web $web -Limit All #added "-limit" since some webs may have large user lists.
@@ -157,7 +175,12 @@ switch($PSCmdlet.ParameterSetName) {
     
                         # Create the new username based on the given input
 					    if ($user.IsDomainGroup) {
-						    [string]$newalias = $newGroupProvider + $username
+                            #Group display name may be outdated.  Lookup the current samAccountName
+                            # Using the SID on-file in SharePoint.
+                            $grpSid = $user.sid
+                            $adGrp = Get-ADGroup -Identity $grpSid
+                            $newName = $adGrp.samAccountName
+						    [string]$newalias = $newGroupProvider + $newName
 					    } else {
 						    [string]$newalias = $newprovider + $username + $newsuffix
 					    }
@@ -174,7 +197,11 @@ switch($PSCmdlet.ParameterSetName) {
             } #End foreach web
             $site.Dispose()
         } #End foreach site
+        write-host
+        $out = 'Finished gathering user data. Writing to file...'
+        write-host $out
         $objCSV | Export-Csv "$csvPath\MigrateUsers.csv" -NoTypeInformation -Force
+        write-host 'done!'
     } # End "document"
 
 } # End switch
