@@ -23,6 +23,9 @@
     Mandatory string variable.
     Specifies the new claim prefix to be applied to existing group assignments at conversion time.
     Enter the New Group Provider Name (Examples -> "Domain\", "c:0-.t|MembershipProvider|domain.com\")
+.PARAMETER ignoreFilter
+    Optional string variable.
+    A filter in regular expression format that will be used to exclude matching results from the oldProvider search.
 .PARAMETER webApplication
     Optional string variable.
     If supplied, the documentation process will be processed for the all sites within the specified Web Application
@@ -71,6 +74,10 @@ param (
     [string]$newGroupProvider,
     [parameter(
         ParameterSetName='document',
+        HelpMessage='Enter a regular expression that will be used to filter out matching old provider results. (Example -> "domain\\[a-zA-Z0-9]+-admin")'
+    )][string]$ignoreFilter,
+    [parameter(
+        ParameterSetName='document',
         Mandatory=$false,
         HelpMessage='Provide the URL of the WebApplication for which to migrate users."'
     )]
@@ -83,11 +90,11 @@ param (
     )]
     [ValidatePattern('^http[s]*://\w+\.\w+')]
     [string]$SPSite,
-	[parameter(
-		ParameterSetName='convert',
-		Mandatory=$true
-	)]
-	[switch]$convert,
+    [parameter(
+        ParameterSetName='convert',
+        Mandatory=$true
+    )]
+    [switch]$convert,
     [parameter(
         Mandatory=$true,
         HelpMessage='Please enter the path to which to save the MigrateUsers.csv file. (i.e. C:\migration)'
@@ -104,12 +111,17 @@ $objCSV = @()
 
 switch($PSCmdlet.ParameterSetName) {
     "convert" {
-	    $objCSV = Import-CSV "$csvPath\MigrateUsers.csv"
+        $objCSV = Import-CSV "$csvPath\MigrateUsers.csv"
         foreach ($object in $objCSV) {
             $user = Get-SPUser -identity $object.OldLogin -web $object.SiteCollection 
             write-host "Moving user:" $user "to:" $object.NewLogin "in site:" $object.SiteCollection 
-            move-spuser -identity $user -newalias $object.NewLogin -ignoresid -Confirm:$false `
-                -ea SilentlyContinue
+            try {
+                move-spuser -identity $user -newalias $object.NewLogin -ignoresid -Confirm:$false `
+                -ea Stop
+            } catch {
+                #Something very wrong is happening here.  All group objects are failing to migrate...
+                write-error "An error occurred when attempting to migrate the user."
+            }
         }
     } # End "convert" 
 
@@ -118,12 +130,12 @@ switch($PSCmdlet.ParameterSetName) {
         $sites = @()
         if($WebApplication) {
             $out = 'Gathering Site Collections from: ' + $webApplication
-            write-host -foregroundColor Cyan $out
+            write-host -foregroundColor Yellow $out
             $sites = get-spsite -WebApplication $webApplication -Limit All
         }
         elseif($SPSite) {
             $out = 'Retrieving Site Collections: ' + $SPSite
-            write-host -foregroundColor Cyan $out
+            write-host -foregroundColor Yellow $out
             $sites = get-spsite $SPSite
         }
         else {
@@ -137,7 +149,7 @@ switch($PSCmdlet.ParameterSetName) {
             write-host -foregroundColor Cyan $out
             #Initialize $webs as an array
             # (needed to prevent the next foreach from attempting to loop a non-array variable.)
-		    $webs = @() 
+            $webs = @() 
             $webs = $site.AllWebs
             
             $out = "    Site has " + $webs.count + " webs."
@@ -147,7 +159,7 @@ switch($PSCmdlet.ParameterSetName) {
                 $out = "    Evaluating web: " + $web.url
                 write-host -foregroundColor Green $out
                 # Get all of the users in a site
-			    $users = @()
+                $users = @()
                 $users = get-spuser -web $web -Limit All #added "-limit" since some webs may have large user lists.
 
                 # Loop through each of the users in the site
@@ -174,32 +186,47 @@ switch($PSCmdlet.ParameterSetName) {
                         }
     
                         # Create the new username based on the given input
-					    if ($user.IsDomainGroup) {
+                        if ($user.IsDomainGroup) { #object is a domain group
+                            [string]$newGrpName = ''
                             #Group display name may be outdated.  Lookup the current samAccountName
                             # Using the SID on-file in SharePoint.
                             $grpSid = $user.sid
-                            $adGrp = Get-ADGroup -Identity $grpSid
-                            $newName = $adGrp.samAccountName
-						    [string]$newalias = $newGroupProvider + $newName
-					    } else {
-						    [string]$newalias = $newprovider + $username + $newsuffix
-					    }
-                    
-                        $objUser = "" | select OldLogin,NewLogin,SiteCollection
-	                    $objUser.OldLogin = $userLogin
-                        $objUser.NewLogin = $newAlias
-	                    $objUser.SiteCollection = $site.Url
-
-	                    $objCSV += $objUser
+                            try { #Retrieval of AD Group could fail. We need a fallback...
+                                $adGrp = Get-ADGroup -Identity $grpSid -ea Stop
+                                $newGrpName = $adGrp.samAccountName
+                            } catch {
+                                $newGrpName = $username
+                            }
+                            [string]$newalias = $newGroupProvider + $newGrpName
+                        } else { #object is a user account
+                            [string]$newalias = $newprovider + $username + $newsuffix
+                        }
+                        # Create a PS Custom Object for each row in the export CSV: 
+                        $userProps = @{
+                            OldLogin = $userLogin
+                            NewLogin = $newAlias
+                            SiteCollection = $site.Url
+                        }
+                        $objUser = New-Object -TypeName PSObject -Property $userProps
+                        # Add the custom object to the export CSV array:
+                        $objCSV += $objUser
                     }   
                 } #End foreach user
-				$web.dispose()
+                $web.dispose()
             } #End foreach web
             $site.Dispose()
         } #End foreach site
         write-host
-        $out = 'Finished gathering user data. Writing to file...'
-        write-host $out
+        $out = 'Finished gathering user data.'
+        write-host $out -ForegroundColor Yellow 
+        if ($ignoreFilter) {
+            $out = 'Results filter defined. filtering output...'
+            write-host $out -ForegroundColor Yellow
+            $objCSV = $objCSV | ? {$_.oldLogin -NotMatch $ignoreFilter}
+        }
+        out-file -force c:\local\temp\MigrateUsers2.csv
+        write-host "Writing to file..."
+        
         $objCSV | Export-Csv "$csvPath\MigrateUsers.csv" -NoTypeInformation -Force
         write-host 'done!'
     } # End "document"
