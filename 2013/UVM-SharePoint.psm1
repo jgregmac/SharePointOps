@@ -1,10 +1,9 @@
 <#
-Name
-   Library-SPBackup.ps1
 .Synopsis
-   Collection of functions for working with SharePoint Backup
+   UVM-SharePoint.psm1 - 
+   Collection of functions originally developed for working with SharePoint Backup
 .Description
-   This script uses the Sharepoint .NET assembly to provide
+   This script might use the Sharepoint .NET assembly to provide
    access to SharePoint sites and sitecollections.
 #>
 
@@ -18,23 +17,19 @@ set-variable  SP_ASSEMBLY -option constant `
 set-variable  STSADM -option constant `
    -value "$env:programfiles\Common Files\Microsoft Shared\Web Server Extensions\14\BIN\STSADM.EXE"
 
-
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 # Additional Script configuration
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
 set-PSDebug -strict                 # Like Perl's "use strict;" pragma
 
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 # Script initialization and parameter checking
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
 # Load Sharepoint .NET Assembly
 # (Do we even need this anymore?)
 [void] [System.Reflection.Assembly]::LoadWithPartialName($SP_ASSEMBLY)
 
 $emptyString = ''
-
 
 # # # # # # # # # # # #  F U N C T I O N S  # # # # # # # # # # # # # # 
 
@@ -56,18 +51,18 @@ function Get-FilenameFromPath ($path) {
     # that ISN'T a good (simple) filename character
 
     $notfilename  = [regex] '[<>:"/\\|?\* ]'
-	
+    
     $filename = ''
-	if ( $path -eq '/' ) {
-		$filename = '_sp_root'
-	}
-	else {
-		$filename = $path     -replace('/sites/' , '' )
-		$filename = $filename -replace( $notfilename , '_')
-	}
+    if ( $path -eq '/' ) {
+        $filename = '_sp_root'
+    }
+    else {
+        $filename = $path     -replace('/sites/' , '' )
+        $filename = $filename -replace( $notfilename , '_')
+    }
 
     $filename += '.spbak'
-	$filename.ToLower()
+    $filename.ToLower()
 }
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
@@ -216,4 +211,8 @@ function Compare-SiteLock( $lock1, $lock2 )
 
 }
 
-Export Get-FilenameFromPath,Get-SiteLock,New-SiteLock,Set-SiteLock
+Export-ModuleMember Compare-SiteLock,
+    Get-FilenameFromPath,
+    Get-SiteLock,
+    New-SiteLock,
+    Set-SiteLock
