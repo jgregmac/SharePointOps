@@ -1,14 +1,12 @@
+param(
+    [string] $waName = 'https://spwinauth.uvm.edu',
+    [string] $logDir = 'e:\SharePoint\Logs\'
+)
 # Bad Features in this context are features that are referenced in a site but 
 # do not have matching assemblies available on the local server.  These
-# features will not work, and likely will create errors on page load.﻿
+# features will not work, and likely will create errors on page load.
 
 Add-PSSnapin microsoft.sharepoint.powershell
-[string] $waName = 'https://spwinauth.uvm.edu'
-[string] $logDir = 'e:\SharePoint\Logs\'
-
-$badGuids = Get-Content Upgrade-*-error.log | % {
-  $_ -match 'feature.+\[(?<guid>[0-9a-z]+-[0-9a-z-]+[^\]]+)\]' `
-  | % {if ($matches.guid) {$matches.guid} } } | sort -Unique
 
 write-host "Collecting all sites..." -ForegroundColor Cyan
 [array] $sites = Get-SPSite -Limit All -WebApplication $waName
@@ -24,25 +22,35 @@ $badSiteFeatures = $sites | % {$_.features | ? {$_.Definition -eq $null}}
 write-host "Finding bad web-scoped features..." -ForegroundColor Cyan
 $badWebFeatures = $webs | % {$_.features | ? {$_.Definition -eq $null}}
 
+<#
 # Alternate discovery method... find all features with definitionId contained
 # in the badGuids array (no idea if this works... need to test on a fresh
 # import):
+push-location $logDir
+$badGuids = Get-Content Upgrade-*-error.log | % {
+  $_ -match 'feature.+\[(?<guid>[0-9a-z]+-[0-9a-z-]+[^\]]+)\]' `
+  | % {if ($matches.guid) {$matches.guid} } } | sort -Unique
+pop-location
 write-host "Finding bad site-scoped features..." -ForegroundColor Cyan
 $badSiteFeatures = $sites | % {$_.features | ? {$badGuids.Contains($_.DefinitionId)}}
 write-host "Finding bad web-scoped features..." -ForegroundColor Cyan
 $badWebFeatures = $webs | % {$_.features | ? {$badGuids.Contains($_.DefinitionId)}}
+#>
 
+<#
 #Report of all bad site and web feature guids:
 [string[]] $badSiteFeatureGuids = @()
 $badSiteFeatureGuids += $badSiteFeatures | % {$_.definitionid} | sort -Unique
 [string[]] $badWebFeatureGuids = @()
 $badWebFeatureGuids += $badWebFeatures | % {$_.definitionid} | sort -Unique
 #End report
+#>
 
 # Deactivate bad features in the site collection scope:
 write-host "Now removing site-scoped bad features..." -ForegroundColor Green
 foreach ($fea in $badSiteFeatures) {
-    write-host "    Removing ["$fea.DefinitionId"] from '"$fea.parent.url"'." -ForegroundColor Gray
+    $out = "    Removing [" + $fea.DefinitionId + "] from '" + $fea.parent.url + "'."
+    write-host $out -ForegroundColor Gray
     Disable-SPFeature -Identity $fea.DefinitionId -url $fea.parent.url -force -confirm:$false
 }
 
@@ -55,10 +63,12 @@ foreach ($fea in $badWebFeatures) {
         -ForegroundColor Gray
     Disable-SPFeature -Identity $fea.DefinitionId -url $fea.parent.site.url -force -confirm:$false
 }
-#Maybe we should do this at the web application layer as well?  SPWebApplication object have a 
-# "features" property as well...
-#Nope!  Investigation shows that there are no null feature definitions at the WebApp layer (not 
-# surprising really, since we did not migrate the webapp itself)
+#Problem with this loop:
+# We are not looking at the scope of the feature.  Each badfeature item has a "scope" attribute.  
+# Use the first "disable-spfeature" if scope is "web".  Use the second if the scope is "site".
+# If the scope is "farm", we have a problem because I don't think we can remove farm features that do not exist.
+
+#We also need a reporting feature here... which features were removed from which sites?  Which features could we not remove?
 
 #A different approach would be use use a dictionary of known bad feature IDs.  Loop though the sites
 # matching each feature against the bad feature dictionary:
