@@ -6,10 +6,10 @@
 - Sends the message defined in $bodyTemplate to the site owner. (Assumes the site UserLogon is a valid email when appending "@uvm.edu").
 #>
 param(
-    [string]$waUrl = "https://spwinauth.uvm.edu"
-    [string]$SmtpServer = "smtp.uvm.edu"
-    [string]$From = "saa-ad@uvm.edu"
-    [string]$subjTemplate = 'Pending Upgrade for your site "-siteURL-"'
+    [string]$waUrl = "https://spwinauth.uvm.edu",
+    [string]$SmtpServer = "smtp.uvm.edu",
+    [string]$From = "saa-ad@uvm.edu",
+    [string]$subjTemplate = 'Pending Upgrade for your site "-siteURL-"',
     [string]$templatePath = 'upgradeMailTemplate.html'
 )
 Set-PSDebug -Strict
