@@ -19,7 +19,7 @@ Add-PSSnapin -Name microsoft.SharePoint.PowerShell
 
 $sites = Get-SPSite -WebApplication $waUrl -Limit All
 $allAdmins = @()
-foreach ($site in $wa.sites) {
+foreach ($site in $sites) {
 	#Write-Host "Working with site: " + $site.url
 	$siteAdmins = @()
 	$siteAdmins = $site.RootWeb.SiteAdministrators
