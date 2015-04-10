@@ -10,22 +10,50 @@
     This script will loop though all sites and webs on the local farm and attempt to deactivate 
     these features.  This will not solve the problem completely, because any web parts that make 
     use of the removed feature likely will break.
+
+    The script returns an array of all features that were removed, the url of the SharePoint object
+    from which they were removed, and the result of the removal action (success or failure).
+
+.PARAMETER waName
+    URL of the SharePoint WebApplication from which to remove null features
+.PARAMETER limit
+    Number of site collections from which to remove the null features.  Default is all site 
+    collections in the web application.
+.PARAMETER logFile
+    CSV file that will be used to record all feature removal actions.
+.PARAMETER WhatIf
+    Not yet implemented.
 #>
 [cmdletBinding()]
-param([string]$waName = 'https://spwinauth.uvm.edu')
+param(
+    [string]$waName = 'https://spwinauth.uvm.edu',
+    [string]$limit = 'All',
+    [string]$logFile = 'c:\local\temp\Remove-SPNullFeatures.csv',
+    [switch]$WhatIf
+)
 
+#Array that will contain the results of this script:
+$outArray = @()
+
+#Load the SharePoint PowerShell cmdlets:
 Add-PSSnapin microsoft.sharepoint.powershell
 
-function Disable-SPNullFeaturesInScope {
+function Disable-SPNullFeatures {
+#Removes null features from the specified SharePoint object (where the object must be a 
+# PSSite or PSWeb.)
     [cmdletBinding()]
     param(
         [parameter(Mandatory=$true)]$SPObject,
         [switch]$WhatIf
     )
+    #Array for holding results of this function:
+    $returns = @()
+    #Console output formatting:
     [string]$indent = ''
     [ConsoleColor]$color = 'Cyan'
     [string]$out = $indent + "Evaluating object: " + $SPObject.url
     Write-Host $out -ForegroundColor $color
+    #Determine the SharePoint object type:
     if ($SPObject -is [Microsoft.Sharepoint.SPSite]) {
         [string]$objType = 'Site'
         $indent = '  '
@@ -35,37 +63,70 @@ function Disable-SPNullFeaturesInScope {
         $indent = '    '
         $color = 'Gray'   
     }
+    #Collect features in the site or web that are scoped to that object, 
+    # AND that have a null definition:
     [array]$features = $site.features | ? {
         ($_.FeatureDefinitionScope -eq $ObjType) -and ($_.Definition -eq $null)
     }
+    #If we get any matching features:
     if ($features.count -gt 0) {
         [string]$out = $indent + 'Removing features from ' + $objType + ' : ' + $site.url
         write-host $out -ForegroundColor $color
         foreach ($fea in $features) {
             $out = $indent + "    Removing [" + $fea.DefinitionId + "] from '" + $fea.parent.url + "'."
             write-host $out -ForegroundColor Yellow
-            if ($WhatIf) { continue }
-            Disable-SPFeature -Identity $fea.DefinitionId -url $fea.parent.url -force -confirm:$false
-        }
-    }
-}
+            if ($WhatIf) { 
+                continue #skip the rest of this foreach loop pass...
+            }
+            try { #Try to disable the feature:
+                Disable-SPFeature -Identity $fea.DefinitionId -url $fea.parent.url -force -confirm:$false -ea Stop
+                [bool]$success = $true
+            } catch {
+                #If disabling the feature failed:
+                [bool]$success = $false
+                $out = "Error removing feature: [" + $fea.DefinitionId + "]`r`n"
+                $Out += 'Message: ' + $_.Exception
+                Write-Error $out
+            } finally {
+                #Build a property bag containing the results of the Disable-SPFeature command:
+                $props = @{
+                    ObjectType  = $objType
+                    FeatureGuid = $fea.DefinitionId 
+                    Url         = $SPObject.Url
+                    Success     = $success
+                } # End Props
+            } #End Try/Catch/Finally
+            $returns += New-Object -TypeName PSObject -Property $props
+        } #End Foreach $fea
+    } # End If $features.count
+    return $returns
+} #End Function
 
-$wa = Get-SPWebApplication $waName
+#####################################################################
+# Begin Main Loop:
 write-host "Collecting all sites..." -ForegroundColor Cyan
-[array]$sites = $wa.Sites
+[array]$sites = Get-SPSite -WebApplication $waName -Limit $limit
+#Loop though all sites:
 foreach ($site in $sites) {
-    Disable-SPNullFeaturesInScope -spObject $site -WhatIf
+    #Attempt to remove features from the site collection:
+    $outArray += Disable-SPNullFeatures -spObject $site #-WhatIf
     [array]$webs = Get-SPWeb -Site $site.url -Limit All
+    #Loop though all webs in the site collection:
     foreach ($web in $webs) {
-        Disable-SPNullFeaturesInScope -spObject $web -WhatIf
+        #Attempt to remove features from the web:
+        $outArray += Disable-SPNullFeatures -spObject $web #-WhatIf
         $web.dispose()
     }
     $site.dispose()
 }
 
+if ($logFile) {
+    if (Test-Path $logFile) {remove-item $logFile -Force -Confirm:$false}
+    $outArray | Export-Csv -Path $logFile -Append 
+}
+return $outArray
+# End Main Loop
+#####################################################################
 
 #Problem with this loop:
 # If the scope is "farm", we have a problem because I don't think we can remove farm features that do not exist.
-
-#We also need a reporting feature here... which features were removed from which sites?  Which features could we not remove?
-
