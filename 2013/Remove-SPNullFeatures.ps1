@@ -108,13 +108,21 @@ write-host "Collecting all sites..." -ForegroundColor Cyan
 [array]$sites = Get-SPSite -WebApplication $waName -Limit $limit
 #Loop though all sites:
 foreach ($site in $sites) {
-    #Attempt to remove features from the site collection:
-    $outArray += Disable-SPNullFeatures -spObject $site #-WhatIf
+    if ($WhatIf) {
+        $WhatIfPreference = $true
+        #Attempt to remove features from the site collection:
+        $outArray += Disable-SPNullFeatures -spObject $site 
+        $WhatIfPreference = $false
+    }
     [array]$webs = Get-SPWeb -Site $site.url -Limit All
     #Loop though all webs in the site collection:
     foreach ($web in $webs) {
-        #Attempt to remove features from the web:
-        $outArray += Disable-SPNullFeatures -spObject $web #-WhatIf
+        if ($WhatIf) {
+            $WhatIfPreference = $true
+            #Attempt to remove features from the web:
+            $outArray += Disable-SPNullFeatures -spObject $web
+            $WhatIfPreference = $false
+        }
         $web.dispose()
     }
     $site.dispose()
