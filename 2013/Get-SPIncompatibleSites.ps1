@@ -13,6 +13,22 @@ set-psdebug -Strict
 
 # Load SharePoint PowerShell CmdLets:
 Add-PSSnapin Microsoft.SharePoint.Powershell -ErrorAction SilentlyContinue
+# Pre-load AD module to speed lookups of site administrators:
+Import-Module ActiveDirectory -ea SilentlyContinue
+
+function Get-ExpiredAdmins {
+    param($admin)
+    [string]$id = $admin.split('\') | select-object -Last 1
+    write-host "Looking up user: $id"
+    try {
+        get-aduser -identity $id -ea Stop | out-null
+    } catch [Microsoft.ActiveDirectory.Management.ADIdentityNotFoundException] {
+        write-host User cannot be found in the directory.
+        return $false
+        exit 
+    }
+    return $true
+}
 
 function Get-SPBadFeatures {
     <#
@@ -78,14 +94,40 @@ function New-BadWebReport {
     } else {
         [string]$rootWeb = $web.Site.Url
     }
+    #Collect info about site administrators:
     [array]$admins = @()
     $admins += $web.SiteAdministrators | % {$_.UserLogin}
+    $adminsWithStatus = @()
+    foreach ($admin in $admins) {
+        [bool]$exists = Get-ExpiredAdmins -admin $admin
+        $AdminProps = @{
+            'admin' = $admin
+            'exists' = $exists
+        }
+        $object = New-Object -TypeName PSObject -Prop $adminProps
+        $adminsWithStatus += $object
+        remove-variable adminProps,object
+    }
+    #Collect info about web templates:
+    [string]$webTempName = $web.webTemplate + '#0'
+    try {
+        [string]$webTempTitle = (Get-SPWebTemplate -Identity $webTempName).Title
+    } catch {
+        [string]$webTempTitle = 'Unknown Template Title'
+    }
+    $templateProps = @{
+        'Name'     = $webTempName;
+        'Title'    = $webTempTitle
+    }
+    $webTemplate = New-Object -TypeName PSObject -Prop $templateProps
+    remove-variable templateProps
+    #Create a 'property bag' to hold all collected site information:
     $properties = @{
-        'WebTemplate'     = $web.webTemplate;
+        'WebTemplate'     = $webTemplate;
         #'webTemplateId'   = $web.webTemplateID; 
         'WebUrl'          = $web.Url;
         'SiteUrl'         = $rootWeb;
-        'Admins'          = $admins;
+        'Admins'          = $adminsWithStatus;
         'Owner'           = $web.site.owner.userLogin;
         'BadWebFeatures'  = $badWebFeatures;
         'BadSiteFeatures' = $badSiteFeatures;
@@ -95,6 +137,7 @@ function New-BadWebReport {
     $web.Dispose()
     $object = New-Object -TypeName PSObject -Prop $properties
     return $object
+    remove-variable properties,object
 }
 
 #Collect all FeatureIDs in the farm:
