@@ -114,7 +114,14 @@ foreach ($site in $sites) {
         $outArray += Disable-SPNullFeatures -spObject $site 
         $WhatIfPreference = $false
     }
-    [array]$webs = Get-SPWeb -Site $site.url -Limit All
+    try { #We have been seeing access denied errors here.  Why?  For which site collection?
+        [array]$webs = Get-SPWeb -Site $site.url -Limit All -ea Stop
+    } catch {
+        $out = [string]$("Error in " + $site.url) 
+        Write-Error $out
+        $out | Out-File -FilePath $logFile -Append
+        exit
+    }
     #Loop though all webs in the site collection:
     foreach ($web in $webs) {
         if ($WhatIf) {

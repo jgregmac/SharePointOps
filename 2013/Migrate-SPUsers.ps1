@@ -28,8 +28,11 @@
     A filter in regular expression format that will be used to exclude matching results from the oldProvider search.
 .PARAMETER webApplication
     Optional string variable.
-    If supplied, the documentation process will be processed for the all sites within the specified Web Application
+    If supplied, the documentation process will be processed for all sites within the specified Web Application
     Provide the URL of the WebApplication for which to migrate users.
+.PARAMETER contentDB
+    Optional string variable.
+    If supplied, the documentation process will be processed for all sites within a specified Content Database. 
 .PARAMETER SPSite
     Optional string variable.
     If supplied, the documentation process will 
@@ -79,17 +82,23 @@ param (
     [parameter(
         ParameterSetName='document',
         Mandatory=$false,
-        HelpMessage='Provide the URL of the WebApplication for which to migrate users."'
+        HelpMessage='Provide the URL of the WebApplication for which to migrate users.'
     )]
     [ValidatePattern('^http[s]*://[A-Za-z]+\.[A-Za-z]+')]
     [string]$webApplication,
     [parameter(
         ParameterSetName='document',
         Mandatory=$false,
-        HelpMessage='Provide the URL of the SharePoint site collection for which to migrate users."'
+        HelpMessage='Provide the URL of the SharePoint site collection for which to migrate users.'
     )]
     [ValidatePattern('^http[s]*://\w+\.\w+')]
     [string]$SPSite,
+    [parameter(
+        ParameterSetName='document',
+        Mandatory=$false,
+        HelpMessage='Provide the name of the SharePoint Content Database for which to migrate users.'
+    )]
+    [string]$contentDB,
     [parameter(
         ParameterSetName='convert',
         Mandatory=$true
@@ -132,13 +141,15 @@ switch($PSCmdlet.ParameterSetName) {
             $out = 'Gathering Site Collections from: ' + $webApplication
             write-host -foregroundColor Yellow $out
             $sites = get-spsite -WebApplication $webApplication -Limit All
-        }
-        elseif($SPSite) {
-            $out = 'Retrieving Site Collections: ' + $SPSite
+        } elseif ($SPSite) {
+            $out = 'Retrieving single Site Collection: ' + $SPSite
             write-host -foregroundColor Yellow $out
             $sites = get-spsite $SPSite
-        }
-        else {
+        } elseif ($contentDB) {
+            $out = 'Retrieving Site Collections from Database: ' + $ContentDB
+            write-host -foregroundColor Yellow $out
+            $sites = get-spsite -ContentDatabase $contentDB -Limit All
+        } else {
             $out = 'Gathering Sites Collections from the local farm.  Dangerous!'
             write-host -foregroundColor Red $out
             $sites = get-spsite -Limit All
